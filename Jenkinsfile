@@ -432,7 +432,8 @@ node {
 			if ("${env.BRANCH_NAME}" != "master") {   
 				env.NODE_ENV="development"
 			}
-			sh "${env.AWS} s3 cp s3://ncsc-mailcheck-static-assets/HelveticaNeue.ttf src/react/ukncsc-semantic-ui-theme/src/themes/default/assets/fonts/"
+//			sh "${env.AWS} s3 cp s3://ncsc-mailcheck-static-assets/HelveticaNeue.ttf src/react/ukncsc-semantic-ui-theme/src/themes/default/assets/fonts/"
+			sh "wget https://github.com/adachis/Lifehacker.me/raw/master/fonts/HelveticaNeue.ttf -o src/react/ukncsc-semantic-ui-theme/src/themes/default/assets/fonts/HelveticaNeue.ttf"
 			sh "cd src/react/ukncsc-semantic-ui-theme;${env.YARN} unlink || exit 0"
 			sh "cd src/react/ukncsc-semantic-ui-theme;${env.YARN};${env.YARN} build;${env.YARN} link" 
 			env.NODE_PATH= "src/"
