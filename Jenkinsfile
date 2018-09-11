@@ -5,16 +5,15 @@ node {
 //---------------- Variables/Definitions
     env.WORKSPACE = pwd()
 	env.DOTNETPATH = "/mnt/jenkins-home/dotnet-${env.BRANCH_NAME}"
-//	env.DOTNET = "${env.DOTNETPATH}/dotnet"
-	env.DOTNET = "/usr/bin/dotnet"
+	env.DOTNET = "${env.DOTNETPATH}/dotnet"
 	env.DOTNETVERSION = "1.0.0-preview2-003131"
 	env.TERRAFORMPATH = "/mnt/jenkins-home/terraform-${env.BRANCH_NAME}"
 	env.TERRAFORM ="${env.TERRAFORMPATH}/terraform"
 	env.TERRAFORMVERSION = "0.11.7"
 	env.TERRAFORMURL = "https://releases.hashicorp.com/terraform/${env.TERRAFORMVERSION}/terraform_${env.TERRAFORMVERSION}_linux_amd64.zip"
 	env.YARNPATH = "/mnt/jenkins-home/yarn-${env.BRANCH_NAME}"
-	env.YARN ="${env.YARNPATH}/yarn-v1.9.4/bin/yarn"
-	env.YARNVERSION = "1.9.4"
+	env.YARN ="${env.YARNPATH}/yarn-v1.6.0/bin/yarn"
+	env.YARNVERSION = "1.6.0"
 	env.YARNURL = "https://yarnpkg.com/latest.tar.gz"
 	env.NODEPATH ="/mnt/jenkins-home/node-${env.BRANCH_NAME}"
 	env.TF_PLAN_FILE = "TF-${env.BRANCH_NAME}-plan.out"
@@ -58,7 +57,7 @@ node {
 
 //-----------------Checkout
 //        gitClean()
-    //slackSend "Build Started - ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)"
+    slackSend "Build Started - ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)"
     sh "rm -rf *"
     sh "rm -rf .git"
     checkout scm
@@ -73,13 +72,13 @@ node {
    // Check docker works
    sh "docker -v"
 
-   //install_aws()
-   //install_mysql()
-   //install_node()
-   //install_angular()
-   //install_yarn()
-   //install_terraform()
-   //install_dotnet()
+   install_aws()
+   install_mysql()
+   install_node()
+   install_angular()
+   install_yarn()
+   install_terraform()
+   install_dotnet()
    }
    
    stage('Environment') {
@@ -126,8 +125,7 @@ node {
 		
         sh "cd Terraform/common/common; ${env.TERRAFORM} init -backend=true -force-copy -input=false -backend-config=\"key=common/terraform.tfstate\""
 //        sh "${env.TERRAFORM} get Terraform/common/common"
-////         sh "set +e; cd Terraform/common/common; ${env.TERRAFORM} plan -detailed-exitcode -refresh=true -out=${env.TF_COMMON_PLAN_FILE} -var-file ../common.tfvars .; echo \$? > /tmp/status"
-        sh "echo 0 >/tmp/status"
+         sh "set +e; cd Terraform/common/common; ${env.TERRAFORM} plan -detailed-exitcode -refresh=true -out=${env.TF_COMMON_PLAN_FILE} -var-file ../common.tfvars .; echo \$? > /tmp/status"
 		
 		def exitCode = readFile('/tmp/status').trim()
         env.APPLY = "false"
@@ -531,7 +529,7 @@ node {
 
 	    sh "eval `${env.AWS} ecr get-login --no-include-email --region ${env.AWSREGION}`"
 		if (env.DOTNETCOMPILE == "true") {
-			//slackSend "Pushing kestrel containers with tag ${env.DOTNET_CONTAINER_GITHASH} - ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)"
+			slackSend "Pushing kestrel containers with tag ${env.DOTNET_CONTAINER_GITHASH} - ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)"
 			docker_push("aggregatereportapi",env.DOTNET_CONTAINER_GITHASH)
 			docker_push("domainstatusapi",env.DOTNET_CONTAINER_GITHASH)
 			docker_push("securitytester",env.DOTNET_CONTAINER_GITHASH)
@@ -542,7 +540,7 @@ node {
 
 		}
 		if (env.FRONTENDBUILD == "true") {
-			//slackSend "Pushing frontend containers with tag ${env.FRONTEND_CONTAINER_GITHASH} - ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)"
+			slackSend "Pushing frontend containers with tag ${env.FRONTEND_CONTAINER_GITHASH} - ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)"
 
 			docker_push("frontend",env.FRONTEND_CONTAINER_GITHASH)
 		}
@@ -656,7 +654,7 @@ node {
 		sh "echo ${env.REACTAPPHASH} > ${env.REACTAPPHASHFILE}"
 		sh "echo ${env.DOTNET_CONTAINER_GITHASH} > ${env.DOTNET_CONTAINER_GITHASH_FILE}"  
 		sh "echo ${env.FRONTEND_CONTAINER_GITHASH} > ${env.FRONTEND_CONTAINER_GITHASH_FILE}"  
-		//slackSend "Build Completed - ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)"
+		slackSend "Build Completed - ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)"
 	}
 }
 
