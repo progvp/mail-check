@@ -130,7 +130,7 @@ node {
 		
         sh "cd Terraform/common/common; ${env.TERRAFORM} init -backend=true -force-copy -input=false -backend-config=\"key=common/terraform.tfstate\""
 //        sh "${env.TERRAFORM} get Terraform/common/common"
-////         sh "set +e; cd Terraform/common/common; ${env.TERRAFORM} plan -detailed-exitcode -refresh=true -out=${env.TF_COMMON_PLAN_FILE} -var-file ../common.tfvars .; echo \$? > /tmp/status"
+        sh "set +e; cd Terraform/common/common; ${env.TERRAFORM} plan -detailed-exitcode -refresh=true -out=${env.TF_COMMON_PLAN_FILE} -var-file ../common.tfvars .; echo \$? > /tmp/status"
         sh "echo 0 >/tmp/status"
 		
 		def exitCode = readFile('/tmp/status').trim()
