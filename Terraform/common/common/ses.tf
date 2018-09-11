@@ -16,7 +16,7 @@ resource "aws_ses_receipt_rule" "staging-aggregate-ses-rule" {
   ]
 
   s3_action {
-    bucket_name = "ncsc-dmarc-staging-aggregate-reports"
+    bucket_name = "dmarcdata-staging-aggregate-reports"
     position    = "1"
   }
 }
@@ -31,7 +31,7 @@ resource "aws_ses_receipt_rule" "staging-forensic-ses-rule" {
   ]
 
   s3_action {
-    bucket_name =  "ncsc-dmarc-staging-forensic-reports"
+    bucket_name =  "dmarcdata-staging-forensic-reports"
     position    = "1"
   }
 }
@@ -48,11 +48,11 @@ resource "aws_ses_receipt_rule" "aggregate-ses-rule" {
   ]
 
   s3_action {
-    bucket_name = "ncsc-dmarc-aggregate-reports"
+    bucket_name = "dmarcdata-aggregate-reports"
     position    = "1"
   }
   s3_action {
-    bucket_name = "ncsc-dmarc-staging-aggregate-reports"
+    bucket_name = "dmarcdata-staging-aggregate-reports"
     position    = "2"
   }
 }
@@ -69,11 +69,11 @@ resource "aws_ses_receipt_rule" "forensic-ses-rule" {
   ]
 
   s3_action {
-    bucket_name =  "ncsc-dmarc-forensic-reports"
+    bucket_name =  "dmarcdata-forensic-reports"
     position    = "1"
   }
   s3_action {
-    bucket_name =  "ncsc-dmarc-staging-forensic-reports"
+    bucket_name =  "dmarcdata-staging-forensic-reports"
     position    = "2"
   }
 }
@@ -90,7 +90,7 @@ resource "aws_ses_receipt_rule" "admin-ses-rule" {
   ]
 
   s3_action {
-    bucket_name =  "ncsc-dmarc-admin-emails"
+    bucket_name =  "dmarcdata-admin-emails"
     position    = "1"
   }
 }

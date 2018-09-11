@@ -1,6 +1,6 @@
 
 resource "aws_s3_bucket" "aggregate-bucket" {
-  bucket = "ncsc-dmarc-aggregate-reports"
+  bucket = "dmarcdata-aggregate-reports"
   acl    = "private"
   policy = <<EOF
 {
@@ -12,7 +12,7 @@ resource "aws_s3_bucket" "aggregate-bucket" {
           "Service": "ses.amazonaws.com"
         },
         "Action": "s3:PutObject",
-        "Resource": "arn:aws:s3:::ncsc-dmarc-aggregate-reports/*",
+        "Resource": "arn:aws:s3:::dmarcdata-aggregate-reports/*",
         "Condition": {
           "StringEquals": {
             "aws:Referer": "${var.aws-account-id}"
@@ -27,7 +27,7 @@ EOF
 }
 
 resource "aws_s3_bucket" "forensic-bucket" {
-  bucket = "ncsc-dmarc-forensic-reports"
+  bucket = "dmarcdata-forensic-reports"
   acl    = "private"
   policy =  <<EOF
 {
@@ -39,7 +39,7 @@ resource "aws_s3_bucket" "forensic-bucket" {
           "Service": "ses.amazonaws.com"
         },
         "Action": "s3:PutObject",
-        "Resource": "arn:aws:s3:::ncsc-dmarc-forensic-reports/*",
+        "Resource": "arn:aws:s3:::dmarcdata-forensic-reports/*",
         "Condition": {
           "StringEquals": {
             "aws:Referer": "${var.aws-account-id}"
@@ -54,7 +54,7 @@ EOF
 }
 
 resource "aws_s3_bucket" "admin-bucket" {
-  bucket = "ncsc-dmarc-admin-emails"
+  bucket = "dmarcdata-admin-emails"
   acl    = "private"
   policy =  <<EOF
 {
@@ -66,7 +66,7 @@ resource "aws_s3_bucket" "admin-bucket" {
           "Service": "ses.amazonaws.com"
         },
         "Action": "s3:PutObject",
-        "Resource": "arn:aws:s3:::ncsc-dmarc-admin-emails/*",
+        "Resource": "arn:aws:s3:::dmarcdata-admin-emails/*",
         "Condition": {
           "StringEquals": {
             "aws:Referer": "${var.aws-account-id}"

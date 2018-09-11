@@ -1,5 +1,5 @@
 resource "aws_s3_bucket" "db-export-bucket" {
-  bucket = "ncsc-dmarc-db-export-${var.env-name}"
+  bucket = "dmarcdata-db-export-${var.env-name}"
   acl    = "private"
 
   versioning {
@@ -20,8 +20,8 @@ policy = <<EOF
                 "s3:ListBucket"
             ],
             "Resource": [
-                "arn:aws:s3:::ncsc-dmarc-db-export-${var.env-name}/*",
-                "arn:aws:s3:::ncsc-dmarc-db-export-${var.env-name}"
+                "arn:aws:s3:::dmarcdata-db-export-${var.env-name}/*",
+                "arn:aws:s3:::dmarcdata-db-export-${var.env-name}"
             ]
         }
     ]

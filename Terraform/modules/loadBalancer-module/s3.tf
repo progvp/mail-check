@@ -1,5 +1,5 @@
 resource "aws_s3_bucket" "lblogs" {
-  bucket = "tf-ncsc-dmarc-${var.env-name}-${var.balancer-name}-accesslogs"
+  bucket = "tf-dmarcdata-${var.env-name}-${var.balancer-name}-accesslogs"
   acl    = "private"
 
   policy = <<EOF
@@ -14,7 +14,7 @@ resource "aws_s3_bucket" "lblogs" {
         ]
       },
 "Action": "s3:PutObject",
-"Resource": "arn:aws:s3:::tf-ncsc-dmarc-${var.env-name}-${var.balancer-name}-accesslogs/*"
+"Resource": "arn:aws:s3:::tf-dmarcdata-${var.env-name}-${var.balancer-name}-accesslogs/*"
 }
 ]
 }

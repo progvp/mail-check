@@ -1,6 +1,6 @@
 
 resource "aws_s3_bucket" "staging-aggregate-bucket" {
-  bucket = "ncsc-dmarc-staging-aggregate-reports"
+  bucket = "dmarcdata-staging-aggregate-reports"
   acl    = "private"
   policy = <<EOF
 {
@@ -12,7 +12,7 @@ resource "aws_s3_bucket" "staging-aggregate-bucket" {
           "Service": "ses.amazonaws.com"
         },
         "Action": "s3:PutObject",
-        "Resource": "arn:aws:s3:::ncsc-dmarc-staging-aggregate-reports/*",
+        "Resource": "arn:aws:s3:::dmarcdata-staging-aggregate-reports/*",
         "Condition": {
           "StringEquals": {
             "aws:Referer": "${var.aws-account-id}"
@@ -27,7 +27,7 @@ EOF
 }
 
 resource "aws_s3_bucket" "staging-forensic-bucket" {
-  bucket = "ncsc-dmarc-staging-forensic-reports"
+  bucket = "dmarcdata-staging-forensic-reports"
   acl    = "private"
   policy =  <<EOF
 {
@@ -39,7 +39,7 @@ resource "aws_s3_bucket" "staging-forensic-bucket" {
           "Service": "ses.amazonaws.com"
         },
         "Action": "s3:PutObject",
-        "Resource": "arn:aws:s3:::ncsc-dmarc-staging-forensic-reports/*",
+        "Resource": "arn:aws:s3:::dmarcdata-staging-forensic-reports/*",
         "Condition": {
           "StringEquals": {
             "aws:Referer": "${var.aws-account-id}"
