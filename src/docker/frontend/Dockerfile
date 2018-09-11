@@ -25,7 +25,7 @@ COPY *.conf /etc/apache2/
 
 RUN mkdir /etc/apache2/modsecurity.d
 RUN cd /etc/apache2/modsecurity.d; git clone https://github.com/SpiderLabs/owasp-modsecurity-crs.git
-COPY crs-setup.conf  /etc/apache2/modsecurity.d/owasp-modsecurity-crs/crs-setup.conf
+##COPY crs-setup.conf  /etc/apache2/modsecurity.d/owasp-modsecurity-crs/crs-setup.conf
 RUN mv /etc/apache2/modsecurity.d/owasp-modsecurity-crs/rules/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf.example /etc/apache2/modsecurity.d/owasp-modsecurity-crs/rules/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf
 RUN mv /etc/apache2/modsecurity.d/owasp-modsecurity-crs/rules/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf.example /etc/apache2/modsecurity.d/owasp-modsecurity-crs/rules/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf
 RUN find /etc/apache2
