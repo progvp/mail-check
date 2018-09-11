@@ -212,7 +212,7 @@ node {
     stage('Unit Tests') {
         if (env.DOTNETCOMPILE == "true") {
 		    sh "/bin/df -kh"
-            sh "#!/bin/bash \n" +
+            sh "#!/bin/bash -x \n" +
 			   "for f in ${env.PROJECT}*.Test; do \n" +
 			   "echo Running unit tests on \$f \n" +
 			   "cd \$f \n" +
