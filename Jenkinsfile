@@ -5,7 +5,8 @@ node {
 //---------------- Variables/Definitions
     env.WORKSPACE = pwd()
 	env.DOTNETPATH = "/mnt/jenkins-home/dotnet-${env.BRANCH_NAME}"
-	env.DOTNET = "${env.DOTNETPATH}/dotnet"
+	//env.DOTNET = "${env.DOTNETPATH}/dotnet"
+	env.DOTNET = "$/usr/bin/dotnet"
 	env.DOTNETVERSION = "1.0.0-preview2-003131"
 	env.TERRAFORMPATH = "/mnt/jenkins-home/terraform-${env.BRANCH_NAME}"
 	env.TERRAFORM ="${env.TERRAFORMPATH}/terraform"
