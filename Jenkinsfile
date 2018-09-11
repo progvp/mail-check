@@ -5,7 +5,8 @@ node {
 //---------------- Variables/Definitions
     env.WORKSPACE = pwd()
 	env.DOTNETPATH = "/mnt/jenkins-home/dotnet-${env.BRANCH_NAME}"
-	env.DOTNET = "${env.DOTNETPATH}/dotnet"
+//	env.DOTNET = "${env.DOTNETPATH}/dotnet"
+	env.DOTNET = "/usr/bin/dotnet"
 	env.DOTNETVERSION = "1.0.0-preview2-003131"
 	env.TERRAFORMPATH = "/mnt/jenkins-home/terraform-${env.BRANCH_NAME}"
 	env.TERRAFORM ="${env.TERRAFORMPATH}/terraform"
@@ -72,15 +73,591 @@ node {
    // Check docker works
    sh "docker -v"
 
-   install_aws()
-   install_mysql()
-   install_node()
-   install_angular()
-   install_yarn()
-   install_terraform()
-   install_dotnet()
+   //install_aws()
+   //install_mysql()
+   //install_node()
+   //install_angular()
+   //install_yarn()
+   //install_terraform()
+   //install_dotnet()
    }
    
+   stage('Environment') {
+	 
+
+	 if ("${env.BRANCH_NAME}" == "master") {  
+	    env.TFVARS_FILE = "prod.tfvars"
+		env.STATE_KEY = "prod"
+		} else {
+        env.TFVARS_FILE = "${env.BRANCH_NAME}.tfvars"
+		env.STATE_KEY = "${env.BRANCH_NAME}"
+		}
+
+		sh "cat Terraform/prod-env/${env.TFVARS_FILE} | grep -E '^env-name' | tr -d ' ' | awk '{print \$2 }' FS='=' | awk '{print \$2 }' FS='\"' |tr -dc ' \$0-9a-z-'   > env-name"
+		env.ENV_NAME = readFile("env-name").trim()
+		echo "Environment name: ${env.ENV_NAME}"
+	
+ 		sh "cat Terraform/prod-env/${env.TFVARS_FILE} | grep -E '^role-to-assume' | tr -d ' ' | awk '{print \$2 }' FS='=' | awk '{print \$2 }' FS='\"' >role-to-assume"
+		env.ROLE_TO_ASSUME = readFile("role-to-assume").trim()
+		echo "Role to assume: ${env.ROLE_TO_ASSUME}"
+// Get AWS account numbers from parameter store
+
+		env.AWSACCOUNT = sh(returnStdout : true, script: "${env.AWS} ssm get-parameters --names ${env.ENV_NAME}-account --region=${env.AWSREGION} | jq -r '.Parameters[0].Value'").trim()
+		env.buildAwsAccount = sh(returnStdout : true, script: "${env.AWS} ssm get-parameters --names build-account --region=${env.AWSREGION} | jq -r '.Parameters[0].Value'").trim()
+		env.ecrAwsAccount = sh(returnStdout : true, script: "${env.AWS} ssm get-parameters --names ecr-account --region=${env.AWSREGION} | jq -r '.Parameters[0].Value'").trim()
+		if (env.ROLE_TO_ASSUME != "") {
+			write_aws_config("/tmp/${env.BUILD_NUMBER}-aws.conf")
+		}
+
+   }
+
+
+//  Terraform the common components which can't exist per environment (SES etc)
+
+    stage('TF Plan (Common)') {
+                    
+        //Remove the terraform state file so we always start from a clean state
+        if (fileExists(".terraform/terraform.tfstate")) {
+            sh "rm -rf .terraform/terraform.tfstate"
+        }
+        if (fileExists("status")) {
+            sh "rm status"
+        }
+		
+        sh "cd Terraform/common/common; ${env.TERRAFORM} init -backend=true -force-copy -input=false -backend-config=\"key=common/terraform.tfstate\""
+//        sh "${env.TERRAFORM} get Terraform/common/common"
+////         sh "set +e; cd Terraform/common/common; ${env.TERRAFORM} plan -detailed-exitcode -refresh=true -out=${env.TF_COMMON_PLAN_FILE} -var-file ../common.tfvars .; echo \$? > /tmp/status"
+        sh "echo 0 >/tmp/status"
+		
+		def exitCode = readFile('/tmp/status').trim()
+        env.APPLY = "false"
+        echo "Terraform Plan Exit Code: ${exitCode}"
+        if (exitCode == "0") {
+            currentBuild.result = 'SUCCESS'
+        }
+        if (exitCode == "1") {
+            error "Plan Failed: ${env.JOB_NAME} - ${env.BUILD_NUMBER}"
+            currentBuild.result = 'FAILURE'
+        }
+		
+        if (exitCode == "2") {
+		    if ("${env.BRANCH_NAME}" == "master") { 
+                echo "Plan Awaiting Approval: ${env.JOB_NAME} - ${env.BUILD_NUMBER}"
+                try {
+                    input message: 'Apply Plan?', ok: 'Apply'
+                    env.APPLY = "true"
+                } catch (err) {
+                    error "Plan Discarded: ${env.JOB_NAME} - ${env.BUILD_NUMBER}"
+                    env.APPLY = "false"
+                    currentBuild.result = 'UNSTABLE'
+                }
+			}
+        }
+    }
+
+
+//---------------------Compare dotnet code hash to avoid recompiling unnecessarily
+    stage('Compare Dotnet') {
+	    if (fileExists("${env.DOTNETHASHFILE}") && fileExists("${env.DOTNET_CONTAINER_GITHASH_FILE}")) { 
+		    env.PREVDOTNETHASH =  readFile("${env.DOTNETHASHFILE}").trim()
+			sh "rm -f ${env.DOTNETHASHFILE}"
+		}
+
+	    sh "find src/dotnet -type f -print0 | sort -z | xargs -0 sha1sum | sha1sum |  cut -d \" \" -f1 | tee dotnethash"
+	    env.DOTNETHASH = readFile("dotnethash").trim()
+	    if (env.PREVDOTNETHASH == env.DOTNETHASH) {
+		    env.DOTNETCOMPILE = "false"
+			env.DOTNET_CONTAINER_GITHASH = readFile("${env.DOTNET_CONTAINER_GITHASH_FILE}").trim()
+			echo "Previous dotnet code hash ${env.PREVDOTNETHASH} matches current commit. Skipping."   
+	    } else {
+		    env.DOTNETCOMPILE = "true"
+			env.DOTNET_CONTAINER_GITHASH = env.GITSHORTHASH
+			echo "Previous dotnet code hash ${env.PREVDOTNETHASH} does not match ${env.DOTNETHASH}. Recompiling....."
+			sh "rm -rf ${env.DOTNETPUBLISHSTASH}"
+			sh "mkdir -p ${env.DOTNETPUBLISHSTASH}"
+             }
+	}
+
+// ---------------------Build dotnet code
+
+	stage('Dotnet Build') {
+	    if (env.DOTNETCOMPILE == "true") {
+	        env.PROJECT = "src/dotnet/Dmarc/src/"
+			
+			sh "rm -rf ${env.DOTNETBINARYSTASH}"
+            sh "mkdir -p ${env.DOTNETBINARYSTASH}"	
+			sh "cp -r ${env.PROJECT}* ${env.DOTNETBINARYSTASH}"
+			
+			env.PROJECT = "${env.DOTNETBINARYSTASH}"
+			sh "rm -rf /mnt/jenkins-home/.nuget"			
+            sh "cd ${env.PROJECT}; ${env.DOTNET} restore"
+
+			sh "#!/bin/bash \n" +
+			   "for f in ${env.PROJECT}*; do \n" +
+			   "echo Building \$f \n" +
+			   "cd \$f \n" +
+			   "if ${env.DOTNET} build --version-suffix build-${env.GITSHORTHASH} \n" +
+			   "then \n" +
+			   "echo Build ok \n" +
+			   "else \n" +
+			   "exit 1\n" +
+			   "fi \n" +
+			   "done" 
+			
+        } 
+    }
+
+
+    stage('Unit Tests') {
+        if (env.DOTNETCOMPILE == "true") {
+		    sh "/bin/df -kh"
+            sh "#!/bin/bash \n" +
+			   "for f in ${env.PROJECT}*.Test; do \n" +
+			   "echo Running unit tests on \$f \n" +
+			   "cd \$f \n" +
+			   "if ${env.DOTNET} test --no-build --where:cat!=Integration \n" +
+			   "then \n" +
+			   "echo Tests ok \n" +
+			   "else \n" +
+			   "exit 1\n" +
+			   "fi \n" +
+			   "done" 
+        }
+    }
+
+
+// ---------------------AggregateReportApi
+
+    stage('Package AggregateReportApi') {
+	    if (env.DOTNETCOMPILE == "true") {
+		    sh "cd ${env.PROJECT}Dmarc.AggregateReport.Api; ${env.DOTNET} publish -c release -o ${env.DOTNETPUBLISHSTASH}AggregateReportApi"
+		}
+    }
+
+	stage('Docker Build AggregateReportApi') {
+        if (env.DOTNETCOMPILE == "true") {
+		    sh "cp src/docker/microservice/Dockerfile ${env.DOTNETPUBLISHSTASH}AggregateReportApi/Dockerfile"
+		    sh "cd ${env.DOTNETPUBLISHSTASH}AggregateReportApi;ls"
+            sh "cd ${env.DOTNETPUBLISHSTASH}AggregateReportApi;docker build -t ${ENV_NAME}-aggregatereportapi ."
+		}
+	}
+
+// ---------------------SecurityTester
+
+    stage('Package SecurityTester') {
+	    if (env.DOTNETCOMPILE == "true") {
+		    sh "cd ${env.PROJECT}Dmarc.MxSecurityTester; ${env.DOTNET} publish -c release -o ${env.DOTNETPUBLISHSTASH}MxSecurityTester"
+		}
+    }
+
+	stage('Docker Build SecurityTester') {
+        if (env.DOTNETCOMPILE == "true") {
+		    sh "cp src/docker/microservice/Dockerfile ${env.DOTNETPUBLISHSTASH}MxSecurityTester/Dockerfile"
+		    sh "cd ${env.DOTNETPUBLISHSTASH}MxSecurityTester;ls"
+            sh "cd ${env.DOTNETPUBLISHSTASH}MxSecurityTester;docker build -t ${ENV_NAME}-securitytester ."
+		}
+	}
+
+// ---------------------SecurityEvaluator
+
+    stage('Package SecurityEvaluator') {
+	    if (env.DOTNETCOMPILE == "true") {
+		    sh "cd ${env.PROJECT}Dmarc.MxSecurityEvaluator; ${env.DOTNET} publish -c release -o ${env.DOTNETPUBLISHSTASH}MxSecurityEvaluator"
+		}
+    }
+
+	stage('Docker Build SecurityEvaluator') {
+        if (env.DOTNETCOMPILE == "true") {
+		    sh "cp src/docker/microservice/Dockerfile ${env.DOTNETPUBLISHSTASH}MxSecurityEvaluator/Dockerfile"
+		    sh "cd ${env.DOTNETPUBLISHSTASH}MxSecurityEvaluator;ls"
+            sh "cd ${env.DOTNETPUBLISHSTASH}MxSecurityEvaluator;docker build -t ${ENV_NAME}-securityevaluator ."
+		}
+	}
+
+
+
+// ---------------------AggregateReportParser
+
+  
+    stage('Package AggregateReportParser') {
+	    if (env.DOTNETCOMPILE == "true") {
+            sh "cd ${env.PROJECT}Dmarc.AggregateReport.Parser.Lambda; ${env.DOTNET} lambda package -c Release -o ${env.DOTNETPUBLISHSTASH}AggregateReportParser.zip"
+        }
+	}
+
+// ---------------------DNS Importer
+
+    stage('Package DNS Importer') {
+	    if (env.DOTNETCOMPILE == "true") {
+            sh "cd ${env.PROJECT}Dmarc.DnsRecord.Importer.Lambda; ${env.DOTNET} lambda package -c Release -o ${env.DOTNETPUBLISHSTASH}DnsRecordImporter.zip" 
+        }
+	}
+
+// ---------------------Domain Status
+
+    stage('Package Domain Status') {
+	    if (env.DOTNETCOMPILE == "true") {
+		    sh "cd ${env.PROJECT}Dmarc.DomainStatus.Api; ${env.DOTNET} publish -c Release -o ${env.DOTNETPUBLISHSTASH}DomainStatusApi" 
+        }
+	}
+
+    stage('Docker Build Domain Status') {
+        if (env.DOTNETCOMPILE == "true") {
+		    sh "cp src/docker/microservice/Dockerfile ${env.DOTNETPUBLISHSTASH}DomainStatusApi/Dockerfile"
+		    sh "cd ${env.DOTNETPUBLISHSTASH}DomainStatusApi;ls"
+            sh "cd ${env.DOTNETPUBLISHSTASH}DomainStatusApi;docker build -t ${ENV_NAME}-domainstatusapi ."
+		}
+	}
+
+// ---------------------record evaluator
+
+    stage('Package Record Evaluator') {
+	    if (env.DOTNETCOMPILE == "true") {
+		    sh "cd ${env.PROJECT}Dmarc.DnsRecord.Evaluator; ${env.DOTNET} publish -c Release -o ${env.DOTNETPUBLISHSTASH}DmarcDnsRecordEvaluator" 
+        }
+	}
+
+    stage('Docker Build Record Evaluator') {
+        if (env.DOTNETCOMPILE == "true") {
+		    sh "cp src/docker/microservice/Dockerfile ${env.DOTNETPUBLISHSTASH}DmarcDnsRecordEvaluator/Dockerfile"
+		    sh "cd ${env.DOTNETPUBLISHSTASH}DmarcDnsRecordEvaluator;ls"
+            sh "cd ${env.DOTNETPUBLISHSTASH}DmarcDnsRecordEvaluator;docker build -t ${ENV_NAME}-recordevaluator ."
+		}
+	}
+
+// ---------------------admin api
+
+    stage('Package admin API') {
+	    if (env.DOTNETCOMPILE == "true") {
+		    sh "cd ${env.PROJECT}Dmarc.Admin.Api; ${env.DOTNET} publish -c Release -o ${env.DOTNETPUBLISHSTASH}DmarcAdminApi" 
+        }
+	}
+
+    stage('Docker Build Admin API') {
+        if (env.DOTNETCOMPILE == "true") {
+		    sh "cp src/docker/microservice/Dockerfile ${env.DOTNETPUBLISHSTASH}DmarcAdminApi/Dockerfile"
+		    sh "cd ${env.DOTNETPUBLISHSTASH}DmarcAdminApi;ls"
+            sh "cd ${env.DOTNETPUBLISHSTASH}DmarcAdminApi;docker build -t ${ENV_NAME}-adminapi ."
+		}
+	}
+
+// ---------------------metrics api
+
+    stage('Package metrics API') {
+	    if (env.DOTNETCOMPILE == "true") {
+		    sh "cd ${env.PROJECT}Dmarc.Metrics.Api; ${env.DOTNET} publish -c Release -o ${env.DOTNETPUBLISHSTASH}DmarcMetricsApi" 
+        }
+	}
+
+    stage('Docker Build Metrics') {
+        if (env.DOTNETCOMPILE == "true") {
+		    sh "cp src/docker/microservice/Dockerfile ${env.DOTNETPUBLISHSTASH}DmarcMetricsApi/Dockerfile"
+		    sh "cd ${env.DOTNETPUBLISHSTASH}DmarcMetricsApi;ls"
+            sh "cd ${env.DOTNETPUBLISHSTASH}DmarcMetricsApi;docker build -t ${ENV_NAME}-metricsapi ."
+		}
+	}
+
+
+
+//---------------------Compare angular app code hash to avoid recompiling unnecessarily
+    stage('Compare Angular App') {
+	    if (fileExists("${env.ANGULARAPPHASHFILE}") && fileExists("${env.ANGULARAPPSTASH}")) { 
+		    env.PREVANGULARAPPHASH =  readFile("${env.ANGULARAPPHASHFILE}").trim()
+		}
+	    sh "find src/angular/dmarc-service -type f -print0 | sort -z | xargs -0 sha1sum | sha1sum |  cut -d \" \" -f1 | tee angularapphash"
+	    env.ANGULARAPPHASH = readFile("angularapphash").trim()
+	    if (env.PREVANGULARAPPHASH == env.ANGULARAPPHASH) {
+		    env.ANGULARAPPCOMPILE = "false"
+			echo "Previous Angular app code hash ${env.ANGULARAPPHASH} matches current commit. Skipping."   
+	    } else {
+		    env.ANGULARAPPCOMPILE = "true"
+			echo "Previous Angular app code hash ${env.ANGULARAPPHASH} does not match ${env.PREVANGULARAPPHASH}. Recompiling....."
+        }
+	}
+
+    stage('Angular App Build') {
+	    if (env.ANGULARAPPCOMPILE == "true") {
+			sh "cd src/angular/dmarc-service;export YARN_CACHE_FOLDER=/mnt/jenkins-home/yarn/${env.BRANCH_NAME}; ${env.YARN} --frozen-lockfile;${env.YARN} build"
+//            sh "cd src/angular/dmarc-service; ${env.NPM} install"
+//		    sh "${env.NPM} --version"
+//		    sh "cd src/angular/dmarc-service; ${env.NPM} run build"
+        }
+	}
+	
+	stage('Angular App Test') {
+        if (env.ANGULARAPPCOMPILE == "true") {
+	        // sh "cd src/angular/dmarc-service; ${env.NPM} test"
+			if (fileExists("${env.ANGULARAPPSTASH}")) {
+				sh "rm -r ${env.ANGULARAPPSTASH};"
+			}
+			sh "mkdir -p ${env.ANGULARAPPSTASH}"
+			sh "cp -r src/angular/dmarc-service/dist/* ${env.ANGULARAPPSTASH}"
+		}
+    }
+
+//---------------------Compare angular app code hash to avoid recompiling unnecessarily
+    stage('Compare React App') {
+	    if (fileExists("${env.REACTAPPHASHFILE}") && fileExists("${env.REACTAPPSTASH}")) { 
+		    env.PREVREACTAPPHASH =  readFile("${env.REACTAPPHASHFILE}").trim()
+		}
+	    sh "find src/react -type f -print0 | sort -z | xargs -0 sha1sum | sha1sum |  cut -d \" \" -f1 | tee reactapphash"
+	    env.REACTAPPHASH = readFile("reactapphash").trim()
+	    if (env.PREVREACTAPPHASH == env.REACTAPPHASH) {
+		    env.REACTAPPCOMPILE = "false"
+			echo "Previous React app code hash ${env.REACTAPPHASH} matches current commit. Skipping."   
+	    } else {
+		    env.REACTAPPCOMPILE = "true"
+			echo "Previous React app code hash ${env.REACTAPPHASH} does not match ${env.PREVREACTAPPHASH}. Recompiling....."
+			
+			env.NODE_PATH= "src/"
+			sh "cd src/react/ukncsc-mail-check-app; echo NODE_PATH=${env.NODE_PATH} > .env;echo REACT_APP_URL_ROUTE=/app >> .env;echo PUBLIC_URL=/app >> .env"
+        }
+	}
+    stage('React App Test') {
+		if (env.REACTAPPCOMPILE == "true") {
+
+			env.NODE_PATH= "src/"
+		    sh "cd src/react/ukncsc-mail-check-app;export CI=true;${env.YARN} --frozen-lockfile;${env.YARN} test"
+		}
+	}
+
+
+    stage('React App Build') {
+	    if (env.REACTAPPCOMPILE == "true") {
+			if ("${env.BRANCH_NAME}" != "master") {   
+				env.NODE_ENV="development"
+			}
+			sh "${env.AWS} s3 cp s3://ncsc-mailcheck-static-assets/HelveticaNeue.ttf src/react/ukncsc-semantic-ui-theme/src/themes/default/assets/fonts/"
+			sh "cd src/react/ukncsc-semantic-ui-theme;${env.YARN} unlink || exit 0"
+			sh "cd src/react/ukncsc-semantic-ui-theme;${env.YARN};${env.YARN} build;${env.YARN} link" 
+			env.NODE_PATH= "src/"
+			sh "cd src/react/ukncsc-mail-check-app;${env.YARN} unlink \"ukncsc-semantic-ui-theme\" || exit 0"
+		    sh "cd src/react/ukncsc-mail-check-app;${env.YARN} link \"ukncsc-semantic-ui-theme\";${env.YARN} --frozen-lockfile;${env.YARN} build"
+			if (fileExists("${env.REACTAPPSTASH}")) {
+				sh "rm -r ${env.REACTAPPSTASH};"
+			}
+			sh "mkdir -p ${env.REACTAPPSTASH}"
+			sh "cp -r src/react/ukncsc-mail-check-app/build/* ${env.REACTAPPSTASH}"
+        }
+	}
+	
+
+//------------------------------------DEPLOY SECTION - DO NOT MODIFY ENVIRONMENT BEFORE THIS POINT
+
+ // ------------------ Frontend
+ stage('Docker Build Frontend') {
+         sh "mkdir -p frontend/public_html;cp -r src/docker/frontend/* frontend/"
+	     sh "mkdir -p frontend/public_html/a;cp -r ${env.ANGULARAPPSTASH}* frontend/public_html/a/"
+		 sh "mkdir -p frontend/public_html/app;cp -r ${env.REACTAPPSTASH}* frontend/public_html/app/"
+
+ if (fileExists("${env.FRONTENDHASHFILE}") && fileExists("${env.FRONTEND_CONTAINER_GITHASH_FILE}")) { 
+	 		    env.PREVFRONTENDHASH =  readFile("${env.FRONTENDHASHFILE}").trim()
+		}
+	    sh "find frontend -type f -print0 | sort -z | xargs -0 sha1sum | sha1sum |  cut -d \" \" -f1 | tee frontendhash"
+	    env.FRONTENDHASH = readFile("frontendhash").trim()
+	    if (env.PREVFRONTENDHASH == env.FRONTENDHASH) {
+		    env.FRONTENDBUILD = "false"
+			echo "Previous frontend hash ${env.FRONTENDHASH} matches current commit. Skipping."   
+			env.FRONTEND_CONTAINER_GITHASH = readFile("${env.FRONTEND_CONTAINER_GITHASH_FILE}").trim()
+	    } else {
+		    env.FRONTENDBUILD = "true"
+			echo "Previous frontend hash ${env.FRONTENDHASH} does not match ${env.PREVFRONTENDHASH}. Rebuilding....."
+			env.FRONTEND_CONTAINER_GITHASH = env.GITSHORTHASH
+			sh "cd frontend;find ."
+            sh "cd frontend;docker build -t ${env.ENV_NAME}-frontend ."
+        }
+
+ }
+
+
+
+
+// ------------------------Terraform Planning
+
+    stage('TF Plan') {
+                    
+        //Remove the terraform state file so we always start from a clean state
+        if (fileExists(".terraform")) {
+            sh "rm -rf .terraform"
+        }
+        if (fileExists("status")) {
+            sh "rm status"
+        }
+   
+	env.APPLY = "false"
+	if (fileExists("Terraform/prod-env/${env.TFVARS_FILE}")) {
+		    sshagent(["${env.PRIVATE_SSH_DEPLOY_KEY_ID}"]) {
+				// add some logic here for TOFU
+				sh "mkdir -p ~/.ssh;ssh-keyscan github.com | tee -a ~/.ssh/known_hosts"
+                sh "cd Terraform/prod-env/prod-env; ${env.TERRAFORM} init -backend=true -force-copy -input=false -backend-config=\"key=${env.STATE_KEY}/terraform.tfstate\""
+			}
+            sh "cd Terraform/prod-env/prod-env; cp ${env.DOTNETPUBLISHSTASH}*.zip . "
+//          sh "${env.TERRAFORM} get Terraform/prod-env/prod-env"
+            if (fileExists("${env.TF_PLAN_FILE}")) {
+			  sh "rm ${env.TF_PLAN_FILE}"
+			}
+		    write_dynamic_tfvars("/tmp/${env.BUILD_NUMBER}.tfvars")
+            sh "cd Terraform/prod-env/prod-env; set +e; ${env.TERRAFORM} plan -detailed-exitcode -refresh=true -out=${env.TF_PLAN_FILE} -var-file ../${env.TFVARS_FILE} -var-file /tmp/${env.BUILD_NUMBER}.tfvars   .; echo \$? > /tmp/status" 
+            sh "rm /tmp/${env.BUILD_NUMBER}.tfvars"
+		    def exitCode = readFile('/tmp/status').trim()
+            echo "Terraform Plan Exit Code: ${exitCode}"
+        if (exitCode == "0") {
+            currentBuild.result = 'SUCCESS'
+        }
+        if (exitCode == "1") {     
+            currentBuild.result = 'FAILURE'
+			sh "rm -rf ${env.DOTNETBINARYSTASH}"
+			sh "echo FORCE REBUILD > ${env.DOTNETHASHFILE}"
+			error "Plan Failed: ${env.JOB_NAME} - ${env.BUILD_NUMBER}"
+			
+        }
+        if (exitCode == "2") {
+            echo "Plan Awaiting Approval: ${env.JOB_NAME} - ${env.BUILD_NUMBER}"
+            try {
+                if ("${env.BRANCH_NAME}" == "master") {    
+                    input message: 'Apply Plan?', ok: 'Apply'
+				}
+                env.APPLY = "true"
+                } catch (err) {
+                    error "Plan Discarded: ${env.JOB_NAME} - ${env.BUILD_NUMBER}"
+                    env.APPLY = "false"
+                    currentBuild.result = 'UNSTABLE'
+                }
+            }
+        }
+	}
+// Upload docker images to ECR
+    stage('Docker to ECR') {
+
+	    sh "eval `${env.AWS} ecr get-login --no-include-email --region ${env.AWSREGION}`"
+		if (env.DOTNETCOMPILE == "true") {
+			//slackSend "Pushing kestrel containers with tag ${env.DOTNET_CONTAINER_GITHASH} - ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)"
+			docker_push("aggregatereportapi",env.DOTNET_CONTAINER_GITHASH)
+			docker_push("domainstatusapi",env.DOTNET_CONTAINER_GITHASH)
+			docker_push("securitytester",env.DOTNET_CONTAINER_GITHASH)
+			docker_push("securityevaluator",env.DOTNET_CONTAINER_GITHASH)
+			docker_push("recordevaluator",env.DOTNET_CONTAINER_GITHASH)
+			docker_push("adminapi",env.DOTNET_CONTAINER_GITHASH)
+			docker_push("metricsapi",env.DOTNET_CONTAINER_GITHASH)
+
+		}
+		if (env.FRONTENDBUILD == "true") {
+			//slackSend "Pushing frontend containers with tag ${env.FRONTEND_CONTAINER_GITHASH} - ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)"
+
+			docker_push("frontend",env.FRONTEND_CONTAINER_GITHASH)
+		}
+
+    }
+
+
+
+    stage('TF Apply') {
+	        
+	        echo "Checking to see if plan was approved, or there are no changes to make..."
+            if (env.APPLY == "true") {
+	            echo "Applying the plan..."
+                if (fileExists("status.apply")) {
+                    sh "rm status.apply"
+                }
+                sh "cd Terraform/prod-env/prod-env; set +e; ${env.TERRAFORM} apply ${env.TF_PLAN_FILE}; echo \$? > /tmp/status.apply"
+                def applyExitCode = readFile('/tmp/status.apply').trim()
+                if (applyExitCode == "0") {
+                    echo "Changes Applied ${env.JOB_NAME} - ${env.BUILD_NUMBER}"    
+                } else {
+                    error "Apply Failed: ${env.JOB_NAME} - ${env.BUILD_NUMBER} "
+                    currentBuild.result = 'FAILURE'	
+                } 
+            }
+    }
+
+	stage('Database Schema') {
+		def awsprofile = ""
+		if (env.ROLE_TO_ASSUME != "") {
+			awsprofile = "--profile assumerole"	
+		}
+        sh "/bin/bash ./apply_schema_changes  Terraform/prod-env/${env.TFVARS_FILE} src/sql ${env.MySQL} ${env.AWS} ${env.AWSREGION} ${awsprofile}"
+	}
+	
+    stage('TF Apply (Common)') {
+		def bucketName = sh(returnStdout : true, script: 'cat Terraform/common/common.tfvars | grep staging-report-bucket | awk \'{print $3}\' FS=\'[=\"]\'').trim()
+		echo "Staging report bucket: ${bucketName}"
+	    if ("${env.BRANCH_NAME}" == "master") {
+	        echo "Checking to see if plan was approved, or there are no changes to make...${env.apply}"
+		if (env.APPLY == "true") {
+	        echo "Applying the plan..."
+                if (fileExists("status.apply")) {
+                    sh "rm status.apply"
+                }
+                sh "set +e; cd Terraform/common/common; ${env.TERRAFORM} apply ${env.TF_COMMON_PLAN_FILE}; echo \$? > /tmp/status.apply"
+                def applyExitCode = readFile('/tmp/status.apply').trim()
+				
+                if (applyExitCode == "0") {
+					sh "${env.AWS}  s3api put-bucket-replication --bucket ${bucketName} --replication-configuration  file://Terraform/common/staging-bucket-replication-policy.json"
+                    echo "Changes Applied ${env.JOB_NAME} - ${env.BUILD_NUMBER}"    
+                } else {
+                    error "Apply Failed: ${env.JOB_NAME} - ${env.BUILD_NUMBER} "
+                    currentBuild.result = 'FAILURE'
+                }
+			}
+        } else {
+		    echo "Not applying terraform outside the master branch"
+		}
+    }   
+	
+
+	stage('Code Release') {
+        if ("${env.BRANCH_NAME}" == "master") { 
+		    sh "mkdir -p -p ~/.ssh/"
+	        sshagent(["${env.PRIVATE_SSH_DEPLOY_KEY_ID}"]) {
+				try {
+						input message: 'Get host key from github.com?', ok: 'Fetch'
+						sh "ssh-keyscan github.com | tee -a ~/.ssh/known_hosts"
+						} catch (err) {
+						echo "skipping SSH host key fetch - will fail if this has not been done previously"
+					}
+				sh "git clone git@github.com:ukncsc/dmarc-processing.git private-repo"
+				sshagent(["${env.PUBLIC_SSH_DEPLOY_KEY_ID}"]) {	
+					sh "git clone git@github.com:ukncsc/mail-check.git public-repo"
+					env.RELEASE = readFile('RELEASE').trim()
+					if (fileExists("public-repo/RELEASE")) {
+						env.CURRENTRELEASE = readFile('public-repo/RELEASE').trim()
+					} else {
+						env.CURRENTRELEASE = "NONE"
+					}
+					echo "Private release version: ${env.RELEASE}"
+					echo "Public release version: ${env.CURRENTRELEASE}"
+
+					if ("${env.RELEASE}" != "${env.CURRENTRELEASE}") {
+				
+						echo "Commiting files in the manifest to the public repo"
+						sh "git config --global user.name \'NCSC Pipeline\'"
+						sh "git config --global user.email \'ncsc@git\'"
+						sh "rsync -av --delete --recursive --exclude=\'.*\' --exclude=\'*.ps1\' --exclude=\'.*/\' --files-from=./MANIFEST ./private-repo/ ./public-repo/"
+						try {
+							input message: 'Publish release to public repository?', ok: 'Apply'
+							sh "cd public-repo; git add .; git commit -m \'Release ${RELEASE}\'; git push"
+						} catch (err) {
+							error "Release to public repository cancelled: ${env.JOB_NAME} - ${env.BUILD_NUMBER}"
+							currentBuild.result = 'UNSTABLE'
+						}
+							
+					}
+				
+				}
+			}
+		}
+	}
+    stage('Store code hashes') {
+	    // Storing code hashes in jenkins home after a successful build
+	    sh "echo ${env.DOTNETHASH} > ${env.DOTNETHASHFILE}"
+        sh "echo ${env.ANGULARAPPHASH} > ${env.ANGULARAPPHASHFILE}"
+        sh "echo ${env.ANGULARPUBLICHASH} > ${env.ANGULARPUBLICHASHFILE}"
+		sh "echo ${env.FRONTENDHASH} > ${env.FRONTENDHASHFILE}"
+		sh "echo ${env.REACTAPPHASH} > ${env.REACTAPPHASHFILE}"
+		sh "echo ${env.DOTNET_CONTAINER_GITHASH} > ${env.DOTNET_CONTAINER_GITHASH_FILE}"  
+		sh "echo ${env.FRONTEND_CONTAINER_GITHASH} > ${env.FRONTEND_CONTAINER_GITHASH_FILE}"  
+		//slackSend "Build Completed - ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)"
+	}
 }
 
 void gitClean() {
