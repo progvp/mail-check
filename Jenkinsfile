@@ -317,7 +317,7 @@ void install_dotnet() {
 		sh "tar -xvf dotnetsdk.tar.gz -C ${env.DOTNETPATH}"
 	    
 		//output dotnet version
-  	    //sh "${env.DOTNET} --version"
+  	    sh "${env.DOTNET} --version"
 	    }
 	
   }
