@@ -1,0 +1,8 @@
+aws-account-id = "944496360745"
+aws-region = "eu-west-2"
+aws-region-name = "eu-west-2"
+report-1st-receiving-domain = "dmarcdata.com"
+report-2nd-receiving-domain = "dmarcdata.com"
+report-staging-receiving-domain = "dmarcdata.com"
+reporting-domains = "dmarcdata.com"
+env-name = "prod"
